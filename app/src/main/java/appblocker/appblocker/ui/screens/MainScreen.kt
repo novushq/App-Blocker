@@ -1,5 +1,6 @@
 package appblocker.appblocker.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -19,6 +20,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -26,12 +28,11 @@ import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Timeline
-import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomSheetDefaults
@@ -40,6 +41,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
@@ -68,11 +70,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import appblocker.appblocker.data.entities.BlockRule
 import appblocker.appblocker.data.entities.BlockRule.Companion.DAY_LABELS
+import appblocker.appblocker.ui.components.FGInlineProgress
+import appblocker.appblocker.ui.components.FGMetricCard
+import appblocker.appblocker.ui.components.FGSectionHeader
+import appblocker.appblocker.ui.components.FGStatusPill
 import appblocker.appblocker.ui.viewmodel.InstalledApp
 import appblocker.appblocker.ui.viewmodel.MainViewModel
 
@@ -87,7 +93,9 @@ fun MainScreen(
     requestUsagePermission: () -> Unit,
     requestOverlay: () -> Unit,
     requestAccessibility: () -> Unit,
-    startService: () -> Unit
+    startService: () -> Unit,
+    onOpenAppUsage: (String) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val usageOk = hasUsagePermission()
     val overlayOk = hasOverlayPermission()
@@ -100,22 +108,34 @@ fun MainScreen(
             accessOk = accessOk,
             requestUsage = requestUsagePermission,
             requestOverlay = requestOverlay,
-            requestAccessibility = requestAccessibility
+            requestAccessibility = requestAccessibility,
+            modifier = modifier
         )
     } else {
         LaunchedEffect(Unit) { startService() }
-        RuleListScreen(vm = vm, accessOk = accessOk, requestAccessibility = requestAccessibility)
+        BlocksOverviewScreen(
+            vm = vm,
+            accessOk = accessOk,
+            requestAccessibility = requestAccessibility,
+            onOpenAppUsage = onOpenAppUsage,
+            modifier = modifier
+        )
     }
 }
 
 // ── Permission Screen (The "Onboarding" Look) ────────────────────────────────
 
 @Composable
-fun PermissionSetupScreen(
-    usageOk: Boolean, overlayOk: Boolean, accessOk: Boolean,
-    requestUsage: () -> Unit, requestOverlay: () -> Unit, requestAccessibility: () -> Unit
+private fun PermissionSetupScreen(
+    usageOk: Boolean,
+    overlayOk: Boolean,
+    accessOk: Boolean,
+    requestUsage: () -> Unit,
+    requestOverlay: () -> Unit,
+    requestAccessibility: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    Surface(color = MaterialTheme.colorScheme.background) {
+    Surface(color = MaterialTheme.colorScheme.background, modifier = modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -145,7 +165,7 @@ fun PermissionSetupScreen(
 
             PermissionCard(
                 "Activity Tracking",
-                "Required to detect apps",
+                "Required to detect app usage",
                 usageOk,
                 requestUsage,
                 Icons.Default.Timeline
@@ -155,7 +175,7 @@ fun PermissionSetupScreen(
                 "Required to show block screen",
                 overlayOk,
                 requestOverlay,
-                Icons.Default.Layers
+                Icons.Default.Lock
             )
             PermissionCard(
                 "Web Protection",
@@ -169,7 +189,7 @@ fun PermissionSetupScreen(
 }
 
 @Composable
-fun PermissionCard(
+private fun PermissionCard(
     title: String,
     desc: String,
     granted: Boolean,
@@ -194,11 +214,7 @@ fun PermissionCard(
                 Text(desc, style = MaterialTheme.typography.labelMedium)
             }
             if (granted) {
-                Icon(
-                    Icons.Default.CheckCircle,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                )
+                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             } else {
                 Button(onClick = onGrant, shape = CircleShape) { Text("Allow") }
             }
@@ -206,18 +222,78 @@ fun PermissionCard(
     }
 }
 
-// ── Rule List (The Content) ──────────────────────────────────────────────────
+// ── Blocks Overview (The Content) ─────────────────────────────────────────────
+
+private data class BlockedAppGroup(
+    val packageName: String,
+    val label: String,
+    val rules: List<BlockRule>,
+    val usageTodayMs: Long
+)
+
+private data class BlockedWebsiteGroup(
+    val domain: String,
+    val label: String,
+    val rules: List<BlockRule>
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RuleListScreen(vm: MainViewModel, accessOk: Boolean, requestAccessibility: () -> Unit) {
+private fun BlocksOverviewScreen(
+    vm: MainViewModel,
+    accessOk: Boolean,
+    requestAccessibility: () -> Unit,
+    onOpenAppUsage: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
     val state by vm.ruleListState.collectAsState()
+    val usageByPackage by vm.blockedAppUsage.collectAsState()
     var showAddSheet by remember { mutableStateOf(false) }
+    var selectedAppPackage by remember { mutableStateOf<String?>(null) }
+    var selectedWebsiteDomain by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        vm.refreshBlockedAppUsage()
+    }
+
+    LaunchedEffect(showAddSheet) {
+        if (showAddSheet) vm.loadInstalledApps()
+    }
+
+    val appGroups = remember(state.rules, usageByPackage) {
+        state.rules
+            .filter { it.packageName != null }
+            .groupBy { it.packageName!! }
+            .map { (packageName, rules) ->
+                BlockedAppGroup(
+                    packageName = packageName,
+                    label = rules.firstOrNull()?.label?.ifBlank { packageName } ?: packageName,
+                    rules = rules.sortedBy { it.dayOfWeek * 10000 + it.startHour * 100 + it.startMinute },
+                    usageTodayMs = usageByPackage[packageName]?.totalTimeMs ?: 0L
+                )
+            }
+            .sortedByDescending { it.usageTodayMs }
+    }
+
+    val websiteGroups = remember(state.rules) {
+        state.rules
+            .filter { it.domain != null }
+            .groupBy { it.domain!! }
+            .map { (domain, rules) ->
+                BlockedWebsiteGroup(
+                    domain = domain,
+                    label = rules.firstOrNull()?.label?.ifBlank { domain } ?: domain,
+                    rules = rules.sortedBy { it.dayOfWeek * 10000 + it.startHour * 100 + it.startMinute }
+                )
+            }
+            .sortedBy { it.label.lowercase() }
+    }
 
     Scaffold(
+        modifier = modifier,
         topBar = {
             LargeTopAppBar(
-                title = { Text("FocusGuard", fontWeight = FontWeight.Black) },
+                title = { Text("Blocks", fontWeight = FontWeight.Black) },
                 colors = TopAppBarDefaults.largeTopAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
                     scrolledContainerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(4.dp)
@@ -230,10 +306,13 @@ fun RuleListScreen(vm: MainViewModel, accessOk: Boolean, requestAccessibility: (
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
                 shape = RoundedCornerShape(20.dp)
-            ) { Icon(Icons.Default.Add, "Add") }
+            ) {
+                Icon(Icons.Default.Add, "Add")
+            }
         }
     ) { padding ->
         LazyColumn(
+            modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
                 top = padding.calculateTopPadding(),
                 bottom = 100.dp,
@@ -249,10 +328,7 @@ fun RuleListScreen(vm: MainViewModel, accessOk: Boolean, requestAccessibility: (
                         color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f),
                         shape = RoundedCornerShape(16.dp)
                     ) {
-                        Row(
-                            Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Outlined.Warning, null)
                             Spacer(Modifier.width(12.dp))
                             Text(
@@ -264,91 +340,283 @@ fun RuleListScreen(vm: MainViewModel, accessOk: Boolean, requestAccessibility: (
                 }
             }
 
-            if (state.rules.isEmpty()) {
-                item {
-                    Box(
-                        Modifier
-                            .fillParentMaxHeight(0.7f)
-                            .fillMaxWidth(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            "No limits set. Peace of mind awaits.",
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                    }
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    FGMetricCard(
+                        title = "Blocked apps",
+                        value = appGroups.size.toString(),
+                        modifier = Modifier.weight(1f)
+                    )
+                    FGMetricCard(
+                        title = "Blocked websites",
+                        value = websiteGroups.size.toString(),
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
 
-            val byDay = state.rules.groupBy { it.dayOfWeek }
-            (1..7).forEach { day ->
-                val dayRules = byDay[day] ?: return@forEach
-                item {
-                    Text(
-                        DAY_LABELS[day - 1].uppercase(),
-                        modifier = Modifier.padding(start = 8.dp, top = 16.dp),
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary,
-                        letterSpacing = 1.5.sp
-                    )
+            item {
+                FGSectionHeader(
+                    title = "Blocked apps",
+                    subtitle = "Tap any app to view active restrictions and usage"
+                )
+            }
+
+            if (appGroups.isEmpty()) {
+                item { EmptySectionCard(text = "No blocked apps yet") }
+            } else {
+                items(appGroups, key = { it.packageName }) { group ->
+                    AppBlockCard(group = group, onClick = { selectedAppPackage = group.packageName })
                 }
-                items(dayRules, key = { it.id }) { rule ->
-                    RuleRow(rule, { vm.toggleRule(rule.id, it) }, { vm.deleteRule(rule.id) })
+            }
+
+            item {
+                FGSectionHeader(
+                    title = "Blocked websites",
+                    subtitle = "Domain restrictions currently configured"
+                )
+            }
+
+            if (websiteGroups.isEmpty()) {
+                item { EmptySectionCard(text = "No blocked websites yet") }
+            } else {
+                items(websiteGroups, key = { it.domain }) { group ->
+                    WebsiteBlockCard(group = group, onClick = { selectedWebsiteDomain = group.domain })
                 }
             }
         }
     }
 
     if (showAddSheet) {
-        AddRuleSheet(vm, { showAddSheet = false }, { vm.addRule(it); showAddSheet = false })
+        AddRuleSheet(
+            vm = vm,
+            onDismiss = { showAddSheet = false },
+            onSave = { rules ->
+                rules.forEach(vm::addRule)
+                showAddSheet = false
+            }
+        )
+    }
+
+    val selectedApp = appGroups.firstOrNull { it.packageName == selectedAppPackage }
+    selectedApp?.let { app ->
+        AppRuleDetailSheet(
+            group = app,
+            onDismiss = { selectedAppPackage = null },
+            onToggle = vm::toggleRule,
+            onDelete = vm::deleteRule,
+            onOpenUsage = {
+                onOpenAppUsage(app.packageName)
+                selectedAppPackage = null
+            }
+        )
+    }
+
+    val selectedWebsite = websiteGroups.firstOrNull { it.domain == selectedWebsiteDomain }
+    selectedWebsite?.let { website ->
+        WebsiteRuleDetailSheet(
+            group = website,
+            onDismiss = { selectedWebsiteDomain = null },
+            onToggle = vm::toggleRule,
+            onDelete = vm::deleteRule
+        )
     }
 }
 
 @Composable
-fun RuleRow(rule: BlockRule, onToggle: (Boolean) -> Unit, onDelete: () -> Unit) {
+private fun EmptySectionCard(text: String) {
+    OutlinedCard(shape = RoundedCornerShape(18.dp)) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(text = text, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun AppBlockCard(group: BlockedAppGroup, onClick: () -> Unit) {
+    val enabledCount = group.rules.count { it.isEnabled }
+    val totalCount = group.rules.size
+    val dayLabel = group.rules.map { DAY_LABELS[it.dayOfWeek - 1] }.distinct().joinToString(", ")
+
     OutlinedCard(
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.outlinedCardColors(
-            containerColor = if (rule.isEnabled) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant.copy(
-                alpha = 0.3f
-            )
-        )
+        onClick = onClick,
+        shape = RoundedCornerShape(22.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            // App Icon Placeholder / Image
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    modifier = Modifier.size(44.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer
+                ) {
+                    Icon(Icons.Default.Apps, null, Modifier.padding(10.dp))
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(group.label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = formatDuration(group.usageTodayMs) + " today",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                FGStatusPill(text = "$enabledCount/$totalCount active", active = enabledCount > 0)
+            }
+            FGInlineProgress(progress = (enabledCount.toFloat() / totalCount.toFloat()).coerceIn(0f, 1f))
+            Text(
+                text = dayLabel,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun WebsiteBlockCard(group: BlockedWebsiteGroup, onClick: () -> Unit) {
+    val enabledCount = group.rules.count { it.isEnabled }
+    val totalCount = group.rules.size
+
+    OutlinedCard(
+        onClick = onClick,
+        shape = RoundedCornerShape(22.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Surface(
-                Modifier.size(48.dp),
+                modifier = Modifier.size(44.dp),
                 shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.colorScheme.secondaryContainer
             ) {
-                if (rule.isWebsiteRule) {
-                    Icon(Icons.Default.Language, null, Modifier.padding(12.dp))
-                } else {
-                    // Fallback icon, logic would use package manager to get actual icon
-                    Icon(Icons.Default.Apps, null, Modifier.padding(12.dp))
-                }
+                Icon(Icons.Default.Language, null, Modifier.padding(10.dp))
             }
-
-            Spacer(Modifier.width(16.dp))
-
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(rule.label.ifBlank { "Unknown" }, fontWeight = FontWeight.Bold, maxLines = 1)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Outlined.Timer,
-                        null,
-                        Modifier.size(14.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(rule.timeLabel(), style = MaterialTheme.typography.bodySmall)
-                }
+                Text(group.label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    text = "$totalCount restriction(s)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            FGStatusPill(text = "$enabledCount active", active = enabledCount > 0)
+        }
+    }
+}
+
+// ── Rule Detail Sheets (App & Website) ───────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AppRuleDetailSheet(
+    group: BlockedAppGroup,
+    onDismiss: () -> Unit,
+    onToggle: (Long, Boolean) -> Unit,
+    onDelete: (Long) -> Unit,
+    onOpenUsage: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        dragHandle = { BottomSheetDefaults.DragHandle() }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            FGSectionHeader(title = group.label, subtitle = "${formatDuration(group.usageTodayMs)} used today")
+            Button(onClick = onOpenUsage, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Timeline, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Open usage details")
             }
 
-            Switch(checked = rule.isEnabled, onCheckedChange = onToggle)
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Default.DeleteOutline, null, tint = MaterialTheme.colorScheme.error)
+            group.rules.forEachIndexed { index, rule ->
+                OutlinedCard(shape = RoundedCornerShape(16.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                text = "${DAY_LABELS[rule.dayOfWeek - 1]}  ${rule.timeLabel()}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        Switch(checked = rule.isEnabled, onCheckedChange = { onToggle(rule.id, it) })
+                        IconButton(onClick = { onDelete(rule.id) }) {
+                            Icon(Icons.Default.DeleteOutline, null, tint = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+                if (index < group.rules.lastIndex) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun WebsiteRuleDetailSheet(
+    group: BlockedWebsiteGroup,
+    onDismiss: () -> Unit,
+    onToggle: (Long, Boolean) -> Unit,
+    onDelete: (Long) -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        dragHandle = { BottomSheetDefaults.DragHandle() }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            FGSectionHeader(title = group.label, subtitle = "${group.rules.size} restriction(s)")
+            group.rules.forEachIndexed { index, rule ->
+                OutlinedCard(shape = RoundedCornerShape(16.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                text = "${DAY_LABELS[rule.dayOfWeek - 1]}  ${rule.timeLabel()}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        Switch(checked = rule.isEnabled, onCheckedChange = { onToggle(rule.id, it) })
+                        IconButton(onClick = { onDelete(rule.id) }) {
+                            Icon(Icons.Default.DeleteOutline, null, tint = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+                if (index < group.rules.lastIndex) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                }
             }
         }
     }
@@ -358,7 +626,11 @@ fun RuleRow(rule: BlockRule, onToggle: (Boolean) -> Unit, onDelete: () -> Unit) 
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AddRuleSheet(vm: MainViewModel, onDismiss: () -> Unit, onSave: (BlockRule) -> Unit) {
+private fun AddRuleSheet(
+    vm: MainViewModel,
+    onDismiss: () -> Unit,
+    onSave: (List<BlockRule>) -> Unit
+) {
     var ruleType by remember { mutableStateOf(RuleType.APP) }
     var selectedApp by remember { mutableStateOf<InstalledApp?>(null) }
     var websiteInput by remember { mutableStateOf("") }
@@ -366,13 +638,13 @@ fun AddRuleSheet(vm: MainViewModel, onDismiss: () -> Unit, onSave: (BlockRule) -
     var startTime by remember { mutableStateOf("09:00") }
     var endTime by remember { mutableStateOf("17:00") }
     var showAppPicker by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
 
     val apps by vm.installedApps.collectAsState()
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         dragHandle = { BottomSheetDefaults.DragHandle() },
-        containerColor = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp)
     ) {
         Column(
@@ -380,15 +652,10 @@ fun AddRuleSheet(vm: MainViewModel, onDismiss: () -> Unit, onSave: (BlockRule) -
                 .padding(horizontal = 24.dp)
                 .padding(bottom = 32.dp)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text(
-                "New Restriction",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
-            )
+            Text("Add restriction", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
 
-            // Custom Segmented Control
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                 SegmentedButton(
                     selected = ruleType == RuleType.APP,
@@ -406,11 +673,8 @@ fun AddRuleSheet(vm: MainViewModel, onDismiss: () -> Unit, onSave: (BlockRule) -
                 Surface(
                     onClick = { showAppPicker = true },
                     shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                    border = androidx.compose.foundation.BorderStroke(
-                        1.dp,
-                        MaterialTheme.colorScheme.outlineVariant
-                    )
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                 ) {
                     Row(
                         Modifier
@@ -420,7 +684,7 @@ fun AddRuleSheet(vm: MainViewModel, onDismiss: () -> Unit, onSave: (BlockRule) -
                     ) {
                         Icon(Icons.Default.Search, null)
                         Spacer(Modifier.width(12.dp))
-                        Text(selectedApp?.label ?: "Choose an application...")
+                        Text(selectedApp?.label ?: "Choose an application")
                     }
                 }
             } else {
@@ -429,23 +693,41 @@ fun AddRuleSheet(vm: MainViewModel, onDismiss: () -> Unit, onSave: (BlockRule) -
                     onValueChange = { websiteInput = it },
                     placeholder = { Text("domain.com") },
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
+                    shape = RoundedCornerShape(16.dp),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)
                 )
             }
 
-            // Days Selector
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = startTime,
+                    onValueChange = { startTime = it },
+                    modifier = Modifier.weight(1f),
+                    label = { Text("Start (HH:mm)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+                OutlinedTextField(
+                    value = endTime,
+                    onValueChange = { endTime = it },
+                    modifier = Modifier.weight(1f),
+                    label = { Text("End (HH:mm)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+            }
+
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 DAY_LABELS.forEachIndexed { i, day ->
                     val dayNum = i + 1
                     val isSelected = dayNum in selectedDays
                     Box(
                         modifier = Modifier
-                            .size(40.dp)
+                            .size(38.dp)
                             .clip(CircleShape)
                             .background(if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
                             .clickable {
-                                selectedDays =
-                                    if (isSelected) selectedDays - dayNum else selectedDays + dayNum
+                                selectedDays = if (isSelected) selectedDays - dayNum else selectedDays + dayNum
                             },
                         contentAlignment = Alignment.Center
                     ) {
@@ -457,29 +739,87 @@ fun AddRuleSheet(vm: MainViewModel, onDismiss: () -> Unit, onSave: (BlockRule) -
                 }
             }
 
+            if (error != null) {
+                Text(
+                    text = error.orEmpty(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+
             Button(
-                onClick = { /* Save Logic same as original */ },
+                onClick = {
+                    val start = parseTime(startTime)
+                    val end = parseTime(endTime)
+
+                    if (start == null || end == null) {
+                        error = "Enter valid times in HH:mm format"
+                        return@Button
+                    }
+
+                    val rules = selectedDays.sorted().mapNotNull { day ->
+                        when (ruleType) {
+                            RuleType.APP -> {
+                                val app = selectedApp ?: return@mapNotNull null
+                                BlockRule(
+                                    packageName = app.packageName,
+                                    label = app.label,
+                                    dayOfWeek = day,
+                                    startHour = start.first,
+                                    startMinute = start.second,
+                                    endHour = end.first,
+                                    endMinute = end.second
+                                )
+                            }
+
+                            RuleType.WEBSITE -> {
+                                val domain = websiteInput.trim()
+                                if (domain.isBlank()) return@mapNotNull null
+                                BlockRule(
+                                    domain = domain,
+                                    label = domain,
+                                    dayOfWeek = day,
+                                    startHour = start.first,
+                                    startMinute = start.second,
+                                    endHour = end.first,
+                                    endMinute = end.second
+                                )
+                            }
+                        }
+                    }
+
+                    if (rules.isEmpty()) {
+                        error = "Select target and at least one day"
+                        return@Button
+                    }
+                    error = null
+                    onSave(rules)
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
                 shape = RoundedCornerShape(16.dp),
                 enabled = selectedDays.isNotEmpty() && (selectedApp != null || websiteInput.isNotBlank())
             ) {
-                Text("Create Rule", fontWeight = FontWeight.Bold)
+                Text("Create rule", fontWeight = FontWeight.Bold)
             }
         }
     }
 
     if (showAppPicker) {
         AppPickerDialog(
-            apps,
-            { selectedApp = it; showAppPicker = false },
-            { showAppPicker = false })
+            apps = apps,
+            onSelect = {
+                selectedApp = it
+                showAppPicker = false
+            },
+            onDismiss = { showAppPicker = false }
+        )
     }
 }
 
 @Composable
-fun AppPickerDialog(
+private fun AppPickerDialog(
     apps: List<InstalledApp>,
     onSelect: (InstalledApp) -> Unit,
     onDismiss: () -> Unit
@@ -488,13 +828,13 @@ fun AppPickerDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {},
-        title = { Text("Select App", fontWeight = FontWeight.Bold) },
+        title = { Text("Select app", fontWeight = FontWeight.Bold) },
         text = {
             Column {
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
-                    placeholder = { Text("Search apps...") },
+                    placeholder = { Text("Search apps") },
                     modifier = Modifier.fillMaxWidth(),
                     shape = CircleShape,
                     leadingIcon = { Icon(Icons.Default.Search, null) }
@@ -509,7 +849,6 @@ fun AppPickerDialog(
                                 .padding(vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // Icon display would go here
                             Surface(
                                 Modifier.size(40.dp),
                                 CircleShape,
@@ -527,4 +866,24 @@ fun AppPickerDialog(
     )
 }
 
-enum class RuleType(val label: String) { APP("App"), WEBSITE("Website") }
+private enum class RuleType { APP, WEBSITE }
+
+private fun parseTime(value: String): Pair<Int, Int>? {
+    val parts = value.trim().split(":")
+    if (parts.size != 2) return null
+    val hour = parts[0].toIntOrNull() ?: return null
+    val minute = parts[1].toIntOrNull() ?: return null
+    if (hour !in 0..23 || minute !in 0..59) return null
+    return hour to minute
+}
+
+private fun formatDuration(ms: Long): String {
+    val h = ms / 3_600_000
+    val m = (ms % 3_600_000) / 60_000
+    val s = (ms % 60_000) / 1_000
+    return when {
+        h > 0 -> "${h}h ${m}m"
+        m > 0 -> "${m}m ${s}s"
+        else -> "${s}s"
+    }
+}

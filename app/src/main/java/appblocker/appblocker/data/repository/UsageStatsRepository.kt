@@ -4,6 +4,9 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.pm.PackageManager
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Single source of truth for ALL usage stats data in the app.
@@ -27,6 +30,36 @@ class UsageStatsRepository private constructor(private val context: Context) {
     private val usageStatsManager =
         context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
     private val packageManager = context.packageManager
+
+    // ── In-memory cache (keyed by normalised start/end, 5-min TTL) ──────────
+    private data class CacheEntry(val fetchedAt: Long, val summary: UsageSummary)
+    private val cache = ConcurrentHashMap<String, CacheEntry>()
+    private val CACHE_TTL_MS = 5 * 60_000L
+
+    private fun cacheKey(start: Long, end: Long): String {
+        // Round end to the nearest 5-min bucket so "now" keys stay stable
+        val bucket = 5 * 60_000L
+        return "$start-${(end / bucket) * bucket}"
+    }
+
+    private fun cachedSummary(start: Long, end: Long): UsageSummary? {
+        val entry = cache[cacheKey(start, end)] ?: return null
+        return if (System.currentTimeMillis() - entry.fetchedAt < CACHE_TTL_MS) entry.summary else null
+    }
+
+    private fun storeSummary(start: Long, end: Long, summary: UsageSummary) {
+        cache[cacheKey(start, end)] = CacheEntry(System.currentTimeMillis(), summary)
+    }
+
+    /** Pre-warm the most common ranges so the UI is instant. Call from a background thread. */
+    fun preloadCommonRanges() {
+        listOf(
+            todayRange(),
+            yesterdayRange(),
+            lastNDaysRange(7),
+            lastNDaysRange(30)
+        ).forEach { (s, e) -> runCatching { getUsageSummary(s, e) } }
+    }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Public data models
@@ -57,10 +90,18 @@ class UsageStatsRepository private constructor(private val context: Context) {
         val totalTimeMs: Long   // sum of all apps in this hour
     )
 
+    data class DailyBucket(
+        val dayIndex: Int,      // 0 = oldest day in range
+        val dayLabel: String,   // e.g. "Mon", "Mar 9"
+        val dayStart: Long,     // epoch ms midnight
+        val totalTimeMs: Long
+    )
+
     data class UsageSummary(
         val totalScreenTimeMs: Long,
         val appStats: List<AppUsageStat>,       // sorted by totalTimeMs desc
         val hourlyBuckets: List<HourlyBucket>,  // 24 entries, index = hour
+        val dailyBuckets: List<DailyBucket>,    // one per calendar day in range
         val rangeStart: Long,
         val rangeEnd: Long
     ) {
@@ -84,13 +125,14 @@ class UsageStatsRepository private constructor(private val context: Context) {
      * This is the only place that calls queryEvents().
      */
     fun getUsageSummary(rangeStart: Long, rangeEnd: Long): UsageSummary {
-        // Map of packageName → list of open sessions (endTime filled in when ACTIVITY_PAUSED)
-        val openSessions = mutableMapOf<String, Long>()          // pkg → resume time
+        cachedSummary(rangeStart, rangeEnd)?.let { return it }
+
+        val openSessions     = mutableMapOf<String, Long>()          // pkg → resume time
         val completedSessions = mutableListOf<AppSession>()
-        val lastUsedMap = mutableMapOf<String, Long>()           // pkg → last event time
+        val lastUsedMap      = mutableMapOf<String, Long>()           // pkg → last event time
 
         val events = usageStatsManager.queryEvents(rangeStart, rangeEnd)
-        val event = UsageEvents.Event()
+        val event  = UsageEvents.Event()
 
         while (events?.hasNextEvent() == true) {
             events.getNextEvent(event)
@@ -99,14 +141,13 @@ class UsageStatsRepository private constructor(private val context: Context) {
             when (event.eventType) {
                 UsageEvents.Event.ACTIVITY_RESUMED -> {
                     openSessions[pkg] = event.timeStamp
-                    lastUsedMap[pkg] = event.timeStamp
+                    lastUsedMap[pkg]  = event.timeStamp
                 }
                 UsageEvents.Event.ACTIVITY_PAUSED,
                 UsageEvents.Event.ACTIVITY_STOPPED -> {
                     val start = openSessions.remove(pkg)
-                    if (start != null && event.timeStamp > start) {
+                    if (start != null && event.timeStamp > start)
                         completedSessions.add(AppSession(pkg, start, event.timeStamp))
-                    }
                     lastUsedMap[pkg] = event.timeStamp
                 }
             }
@@ -114,9 +155,7 @@ class UsageStatsRepository private constructor(private val context: Context) {
 
         // Close any sessions still open at rangeEnd (app still in foreground)
         openSessions.forEach { (pkg, start) ->
-            if (rangeEnd > start) {
-                completedSessions.add(AppSession(pkg, start, rangeEnd))
-            }
+            if (rangeEnd > start) completedSessions.add(AppSession(pkg, start, rangeEnd))
         }
 
         // Build per-app stats
@@ -132,21 +171,36 @@ class UsageStatsRepository private constructor(private val context: Context) {
         }.sortedByDescending { it.totalTimeMs }
 
         // Build 24 hourly buckets
-        val hourlyBuckets = buildHourlyBuckets(completedSessions, rangeStart, rangeEnd)
+        val hourlyBuckets  = buildHourlyBuckets(completedSessions, rangeStart, rangeEnd)
+        val dailyBuckets   = buildDailyBuckets(completedSessions, rangeStart, rangeEnd)
+        val totalMs        = appStats.sumOf { it.totalTimeMs }
 
-        val totalMs = appStats.sumOf { it.totalTimeMs }
-
-        return UsageSummary(
+        val summary = UsageSummary(
             totalScreenTimeMs = totalMs,
             appStats          = appStats,
             hourlyBuckets     = hourlyBuckets,
+            dailyBuckets      = dailyBuckets,
             rangeStart        = rangeStart,
             rangeEnd          = rangeEnd
         )
+
+        storeSummary(rangeStart, rangeEnd, summary)
+        return summary
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Convenience range builders — pass directly to getUsageSummary()
+    // Public helper — per-app hourly chart usable from UI layer
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** Compute 24-bucket hourly usage for a single app from its already-fetched sessions. */
+    fun computeAppHourlyBuckets(
+        sessions: List<AppSession>,
+        rangeStart: Long,
+        rangeEnd: Long
+    ): List<HourlyBucket> = buildHourlyBuckets(sessions, rangeStart, rangeEnd)
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Convenience range builders
     // ─────────────────────────────────────────────────────────────────────────
 
     /** Today: midnight → now */
@@ -185,8 +239,27 @@ class UsageStatsRepository private constructor(private val context: Context) {
         return cal.timeInMillis to System.currentTimeMillis()
     }
 
+    /** Returns (weekStart, weekEnd) for the ISO-week that is [weeksAgo] weeks before the current one.
+     *  weeksAgo = 0 → current week (Mon 00:00 → now)
+     *  weeksAgo = 1 → last week (Mon 00:00 → Sun 23:59:59) etc.
+     */
+    fun isoWeekRange(weeksAgo: Int): Pair<Long, Long> {
+        val cal = java.util.Calendar.getInstance().apply {
+            firstDayOfWeek = java.util.Calendar.MONDAY
+            set(java.util.Calendar.DAY_OF_WEEK, java.util.Calendar.MONDAY)
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        cal.add(java.util.Calendar.WEEK_OF_YEAR, -weeksAgo)
+        val start = cal.timeInMillis
+        val end   = if (weeksAgo == 0) System.currentTimeMillis() else start + 7L * 86_400_000L
+        return start to end
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
-    // Focused queries — built on top of getUsageSummary, no extra DB calls
+    // Focused queries
     // ─────────────────────────────────────────────────────────────────────────
 
     /** Total screen time for today in ms */
@@ -228,8 +301,8 @@ class UsageStatsRepository private constructor(private val context: Context) {
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * Distribute session durations into 24 one-hour buckets.
-     * A session that spans multiple hours is split proportionally.
+     * Distribute session durations into 24 one-hour buckets keyed by hour-of-day (0–23).
+     * Uses Calendar.HOUR_OF_DAY so it works correctly across day boundaries and multi-day ranges.
      */
     private fun buildHourlyBuckets(
         sessions: List<AppSession>,
@@ -238,34 +311,64 @@ class UsageStatsRepository private constructor(private val context: Context) {
     ): List<HourlyBucket> {
         val buckets = LongArray(24) { 0L }
 
-        // Find the calendar day start for rangeStart to compute hour offsets
-        val dayCal = java.util.Calendar.getInstance().apply {
-            timeInMillis = rangeStart
-            set(java.util.Calendar.HOUR_OF_DAY, 0)
-            set(java.util.Calendar.MINUTE, 0)
-            set(java.util.Calendar.SECOND, 0)
-            set(java.util.Calendar.MILLISECOND, 0)
-        }
-        val dayStart = dayCal.timeInMillis
-
         for (session in sessions) {
             val sStart = session.startTime.coerceAtLeast(rangeStart)
             val sEnd   = session.endTime.coerceAtMost(rangeEnd)
             if (sEnd <= sStart) continue
 
-            // Walk through each hour the session touches
             var cursor = sStart
             while (cursor < sEnd) {
-                val offsetMs   = cursor - dayStart
-                val hourIndex  = (offsetMs / 3_600_000L).toInt().coerceIn(0, 23)
-                val hourEnd    = dayStart + (hourIndex + 1) * 3_600_000L
-                val sliceEnd   = minOf(sEnd, hourEnd)
+                val cal = java.util.Calendar.getInstance().apply { timeInMillis = cursor }
+                val hourIndex = cal.get(java.util.Calendar.HOUR_OF_DAY)
+
+                // Advance to start of next hour
+                val nextHour = java.util.Calendar.getInstance().apply {
+                    timeInMillis = cursor
+                    set(java.util.Calendar.MINUTE, 0); set(java.util.Calendar.SECOND, 0)
+                    set(java.util.Calendar.MILLISECOND, 0)
+                    add(java.util.Calendar.HOUR_OF_DAY, 1)
+                }
+                val sliceEnd = minOf(sEnd, nextHour.timeInMillis)
                 buckets[hourIndex] += sliceEnd - cursor
                 cursor = sliceEnd
             }
         }
 
         return buckets.mapIndexed { hour, ms -> HourlyBucket(hour, ms) }
+    }
+
+    /**
+     * Build one [DailyBucket] per calendar day that falls within [rangeStart]..[rangeEnd].
+     */
+    private fun buildDailyBuckets(
+        sessions: List<AppSession>,
+        rangeStart: Long,
+        rangeEnd: Long
+    ): List<DailyBucket> {
+        val sdf  = SimpleDateFormat("EEE", Locale.getDefault())
+        val days = mutableListOf<Triple<Long, Long, String>>() // (dayStart, dayEnd, label)
+
+        val cal = java.util.Calendar.getInstance().apply {
+            timeInMillis = rangeStart
+            set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0);       set(java.util.Calendar.MILLISECOND, 0)
+        }
+
+        while (cal.timeInMillis < rangeEnd) {
+            val dayStart = cal.timeInMillis
+            cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
+            val dayEnd = minOf(cal.timeInMillis, rangeEnd)
+            days.add(Triple(dayStart, dayEnd, sdf.format(java.util.Date(dayStart))))
+        }
+
+        return days.mapIndexed { index, (dayStart, dayEnd, label) ->
+            val totalMs = sessions.sumOf { session ->
+                val sStart = session.startTime.coerceAtLeast(dayStart)
+                val sEnd   = session.endTime.coerceAtMost(dayEnd)
+                if (sEnd > sStart) sEnd - sStart else 0L
+            }
+            DailyBucket(index, label, dayStart, totalMs)
+        }
     }
 
     private fun resolveAppName(packageName: String): String {

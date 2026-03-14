@@ -7,8 +7,12 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import appblocker.appblocker.data.entities.BlockRule
 import appblocker.appblocker.data.repository.BlockRepository
+import appblocker.appblocker.data.repository.UsageStatsRepository
+import appblocker.appblocker.data.repository.UsageStatsRepository.AppUsageStat
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.lang.SecurityException
 
 // ── Simple data class for installed app picker ────────────────────────────────
 data class InstalledApp(
@@ -25,6 +29,7 @@ data class RuleListUiState(
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo = BlockRepository.get(app)
+    private val usageRepo = UsageStatsRepository.get(app)
 
     // ── Rule list ─────────────────────────────────────────────────────────────
 
@@ -37,9 +42,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _installedApps = MutableStateFlow<List<InstalledApp>>(emptyList())
     val installedApps: StateFlow<List<InstalledApp>> = _installedApps.asStateFlow()
 
+    private val _blockedAppUsage = MutableStateFlow<Map<String, AppUsageStat>>(emptyMap())
+    val blockedAppUsage: StateFlow<Map<String, AppUsageStat>> = _blockedAppUsage.asStateFlow()
+
+    private val _isUsageLoading = MutableStateFlow(false)
+    val isUsageLoading: StateFlow<Boolean> = _isUsageLoading.asStateFlow()
+
+    init {
+        refreshBlockedAppUsage()
+    }
+
     fun loadInstalledApps() {
         if (_installedApps.value.isNotEmpty()) return
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val pm = getApplication<Application>().packageManager
             val apps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
                 .filter { it.flags and ApplicationInfo.FLAG_SYSTEM == 0 }   // user-installed only
@@ -49,11 +64,44 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun refreshBlockedAppUsage() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _isUsageLoading.value = true
+            try {
+                val packageNames = repo.allRules()
+                    .first()
+                    .mapNotNull { it.packageName }
+                    .toSet()
+
+                if (packageNames.isEmpty()) {
+                    _blockedAppUsage.value = emptyMap()
+                    return@launch
+                }
+
+                val (start, end) = usageRepo.todayRange()
+                val appStats = usageRepo.getUsageSummary(start, end).appStats
+                _blockedAppUsage.value = appStats
+                    .filter { it.packageName in packageNames }
+                    .associateBy { it.packageName }
+            } catch (_: SecurityException) {
+                _blockedAppUsage.value = emptyMap()
+            } finally {
+                _isUsageLoading.value = false
+            }
+        }
+    }
+
     // ── Mutations ─────────────────────────────────────────────────────────────
 
-    fun addRule(rule: BlockRule) = viewModelScope.launch { repo.addRule(rule) }
+    fun addRule(rule: BlockRule) = viewModelScope.launch {
+        repo.addRule(rule)
+        refreshBlockedAppUsage()
+    }
 
-    fun deleteRule(id: Long) = viewModelScope.launch { repo.deleteRule(id) }
+    fun deleteRule(id: Long) = viewModelScope.launch {
+        repo.deleteRule(id)
+        refreshBlockedAppUsage()
+    }
 
     fun toggleRule(id: Long, enabled: Boolean) =
         viewModelScope.launch { repo.setRuleEnabled(id, enabled) }

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Accessibility Service configuration for FocusGuard website blocking.
+
+    Key decisions:
+      accessibilityEventTypes:
+        - typeWindowContentChanged  → fires when the URL bar text updates while browsing
+        - typeWindowStateChanged    → fires when a new tab/page is opened
+
+      packageNames:
+        Only listen to known browser packages. This keeps CPU overhead minimal —
+        the service ignores events from all other apps entirely.
+        Add more browsers here if needed (same package name visible in Play Store URL).
+
+      canRetrieveWindowContent="true":
+        Required to walk the view hierarchy and read the URL bar text.
+
+      notificationTimeout="100":
+        Minimum ms between successive event callbacks. 100 ms is fast enough for
+        real-time URL detection without hammering the main thread.
+
+      accessibilityFlags:
+        FLAG_REPORT_VIEW_IDS      → lets us find nodes by resource ID (faster than tree walk)
+        FLAG_RETRIEVE_INTERACTIVE_WINDOWS → access windows that aren't in the active stack
+-->
+<accessibility-service
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowContentChanged|typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="100"
+    android:packageNames="
+        com.android.chrome,
+        org.mozilla.firefox,
+        com.microsoft.emmx,
+        com.opera.browser,
+        com.brave.browser,
+        com.sec.android.app.sbrowser,
+        com.UCMobile.intl,
+        com.kiwibrowser.browser" />

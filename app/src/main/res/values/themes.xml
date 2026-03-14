@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+        Base app theme. Compose handles the actual Material3 theming at runtime,
+        so this only needs to suppress the default ActionBar and set a window background.
+    -->
+    <style name="Theme.FocusGuard" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+    </style>
+
+    <!--
+        Theme for BlockedOverlayActivity.
+        windowIsTranslucent + transparent background lets the dark scrim composable
+        show through without a white flash on launch.
+        windowNoTitle + fullscreen ensures the overlay fills the whole screen.
+    -->
+    <style name="Theme.FocusGuard.Overlay" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+    </style>
+
+</resources>

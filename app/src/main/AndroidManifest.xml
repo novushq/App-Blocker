@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- ══════════════════════════════════════════════════════════════
+         PERMISSIONS
+         ══════════════════════════════════════════════════════════════ -->
+
+    <!--
+        Detect which app is in the foreground.
+        NOT auto-granted — user must go to:
+        Settings → Apps → Special app access → Usage access → FocusGuard → Allow
+        We check this in MainActivity via AppOpsManager.
+    -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+
+    <!--
+        Show the block overlay on top of other apps.
+        NOT auto-granted — user directed to Settings.ACTION_MANAGE_OVERLAY_PERMISSION.
+        Checked via Settings.canDrawOverlays().
+    -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!--
+        Read browser address bar content for website blocking.
+        NOT auto-granted — user must enable in Settings → Accessibility.
+        Declared here so the system registers FocusAccessibilityService.
+    -->
+    <uses-permission
+        android:name="android.permission.BIND_ACCESSIBILITY_SERVICE"
+        tools:ignore="ProtectedPermissions" />
+
+    <!-- Keep the monitor service alive -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!--
+        Required on API 34+ for foreground services that don't fit standard types.
+        Paired with the <property> inside <service>.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- Auto-restart service on boot -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Post the persistent "FocusGuard active" notification -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Prevent CPU sleep while monitoring -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!--
+        Query the full package list for the app-picker in the UI.
+        Required on API 30+ alongside the <queries> block below.
+    -->
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+
+    <!-- ══════════════════════════════════════════════════════════════
+         QUERIES  (API 30+ visibility)
+         ══════════════════════════════════════════════════════════════ -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
+    <!-- ══════════════════════════════════════════════════════════════
+         APPLICATION
+         ══════════════════════════════════════════════════════════════ -->
+    <application
+        android:name=".FocusGuardApplication"
+        android:allowBackup="true"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.FocusGuard">
+
+        <!-- ── Main entry point ──────────────────────────────────── -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- ── Block overlay ─────────────────────────────────────────
+             Shown full-screen when a blocked app/website is detected.
+             singleInstance prevents duplicate overlay stacking.
+             excludeFromRecents hides it from the Recents screen.
+        ─────────────────────────────────────────────────────────── -->
+        <activity
+            android:name=".ui.screens.BlockedOverlayActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:theme="@style/Theme.FocusGuard.Overlay" />
+
+        <!-- ── App monitor foreground service ────────────────────────
+             Polls UsageStatsManager every 1 s.
+             specialUse type + <property> required on API 34+.
+        ─────────────────────────────────────────────────────────── -->
+        <service
+            android:name=".service.AppMonitorService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <!--
+                API 34 requirement: declare a human-readable sub-type
+                for "specialUse" foreground services.
+            -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Monitors the foreground application to enforce block schedules" />
+        </service>
+
+        <!-- ── Accessibility service ──────────────────────────────────
+             Reads browser URL bars to detect and block websites.
+             User enables it in Settings → Accessibility → FocusGuard.
+             Config file: res/xml/accessibility_service_config.xml
+        ─────────────────────────────────────────────────────────── -->
+        <service
+            android:name=".service.FocusAccessibilityService"
+            android:exported="true"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- ── Boot receiver ─────────────────────────────────────────
+             Restarts AppMonitorService after reboot or app update.
+        ─────────────────────────────────────────────────────────── -->
+        <receiver
+            android:name=".receiver.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+</manifest>

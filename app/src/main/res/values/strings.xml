@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FocusGuard</string>
+
+    <!-- Shown in Settings → Accessibility list -->
+    <string name="accessibility_service_label">FocusGuard Website Blocker</string>
+
+    <!-- Shown when user taps the service in the Accessibility settings page -->
+    <string name="accessibility_service_description">
+        FocusGuard reads the address bar in supported browsers to detect and block
+        websites according to your schedule. It does not collect, store, or transmit
+        any browsing data.
+    </string>
+</resources>

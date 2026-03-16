@@ -3,7 +3,6 @@ package appblocker.appblocker.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,6 +17,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 data class FGChartEntry(
@@ -40,7 +41,7 @@ fun FGBarChart(
     }
 
     val max = entries.maxOf { it.value }.takeIf { it > 0f } ?: 1f
-    val labelStep = (entries.size / maxVisibleLabels).coerceAtLeast(1)
+    val labelStep = (entries.size / maxVisibleLabels.coerceAtLeast(1)).coerceAtLeast(1)
 
     Column(modifier = modifier) {
         Row(
@@ -67,18 +68,22 @@ fun FGBarChart(
         }
 
         Spacer(Modifier.height(8.dp))
-        BoxWithConstraints(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth()) {
             entries.forEachIndexed { index, entry ->
-                if (index % labelStep != 0 && index != entries.lastIndex) return@forEachIndexed
-                val x = if (entries.size == 1) 0f else index.toFloat() / (entries.lastIndex).toFloat()
-                Text(
-                    text = entry.xLabel,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .padding(start = maxWidth * x)
-                )
+                val show = index % labelStep == 0 || index == entries.lastIndex
+                Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (show) entry.xLabel else "",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip,
+                        textAlign = TextAlign.Center
+                    )
+                }
             }
         }
     }

@@ -103,6 +103,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         refreshBlockedAppUsage()
     }
 
+    fun deleteRules(ids: List<Long>) = viewModelScope.launch {
+        for (id in ids.distinct()) {
+            repo.deleteRule(id)
+        }
+        refreshBlockedAppUsage()
+    }
+
     fun toggleRule(id: Long, enabled: Boolean) =
         viewModelScope.launch { repo.setRuleEnabled(id, enabled) }
+
+    fun toggleRules(ids: List<Long>, enabled: Boolean) =
+        viewModelScope.launch { ids.distinct().forEach { repo.setRuleEnabled(it, enabled) } }
+
+    fun pauseRules(ids: List<Long>, minutes: Int) = viewModelScope.launch {
+        val until = System.currentTimeMillis() + minutes.coerceAtLeast(1) * 60_000L
+        ids.forEach { repo.setRulePausedUntil(it, until) }
+    }
+
+    fun resumeRules(ids: List<Long>) = viewModelScope.launch {
+        ids.forEach { repo.setRulePausedUntil(it, 0L) }
+    }
 }

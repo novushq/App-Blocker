@@ -19,6 +19,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -27,15 +29,16 @@ import androidx.compose.ui.unit.dp
 fun FGSectionHeader(title: String, subtitle: String? = null, modifier: Modifier = Modifier) {
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
-            text = title,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.SemiBold
+            text       = title,
+            style      = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color      = MaterialTheme.colorScheme.onBackground
         )
         if (!subtitle.isNullOrBlank()) {
             Spacer(Modifier.height(2.dp))
             Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
+                text  = subtitle,
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
@@ -50,23 +53,24 @@ fun FGMetricCard(
     accent: Color = MaterialTheme.colorScheme.primary
 ) {
     ElevatedCard(
-        modifier = modifier,
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)),
+        modifier  = modifier,
+        shape     = RoundedCornerShape(18.dp),
+        colors    = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+        ),
         elevation = CardDefaults.elevatedCardElevation(defaultElevation = 0.dp)
     ) {
-        Column(Modifier.padding(14.dp)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
-                text = title,
-                style = MaterialTheme.typography.labelMedium,
+                text  = title,
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Spacer(Modifier.height(4.dp))
             Text(
-                text = value,
-                style = MaterialTheme.typography.titleMedium,
+                text       = value,
+                style      = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = accent
+                color      = accent
             )
         }
     }
@@ -74,44 +78,55 @@ fun FGMetricCard(
 
 @Composable
 fun FGStatusPill(text: String, modifier: Modifier = Modifier, active: Boolean = true) {
-    val bg = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+    val bg = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
     else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-    val fg = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+    val fg = if (active) MaterialTheme.colorScheme.primary
+    else MaterialTheme.colorScheme.onSurfaceVariant
 
     Surface(
         modifier = modifier,
-        color = bg,
-        shape = RoundedCornerShape(999.dp)
+        color    = bg,
+        shape    = RoundedCornerShape(999.dp)
     ) {
         Text(
-            text = text,
+            text     = text,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-            style = MaterialTheme.typography.labelMedium,
-            color = fg,
+            style    = MaterialTheme.typography.labelSmall,
+            color    = fg,
             fontWeight = FontWeight.Medium
         )
     }
 }
 
 @Composable
-fun FGInlineProgress(progress: Float, modifier: Modifier = Modifier) {
-    val clamped = progress.coerceIn(0f, 1f)
+fun FGInlineProgress(
+    progress: Float,
+    modifier: Modifier = Modifier,
+    trackColor: Color  = Color.Unspecified,
+    fillColor: Color   = Color.Unspecified
+) {
+    val clamped   = progress.coerceIn(0f, 1f)
+    val trackFill = if (trackColor == Color.Unspecified)
+        MaterialTheme.colorScheme.surfaceVariant else trackColor
+    val barFill   = if (fillColor == Color.Unspecified)
+        MaterialTheme.colorScheme.primary else fillColor
+
     Box(
         modifier = modifier
             .fillMaxWidth()
             .height(6.dp)
-            .background(
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                shape = RoundedCornerShape(999.dp)
-            )
+            .clip(RoundedCornerShape(999.dp))
+            .background(trackFill)
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth(clamped)
                 .height(6.dp)
+                .clip(RoundedCornerShape(999.dp))
                 .background(
-                    color = MaterialTheme.colorScheme.primary,
-                    shape = RoundedCornerShape(999.dp)
+                    Brush.horizontalGradient(
+                        listOf(barFill.copy(alpha = 0.65f), barFill)
+                    )
                 )
         )
     }
@@ -120,17 +135,21 @@ fun FGInlineProgress(progress: Float, modifier: Modifier = Modifier) {
 @Composable
 fun FGKeyValueRow(label: String, value: String, modifier: Modifier = Modifier) {
     Row(
-        modifier = modifier.fillMaxWidth(),
+        modifier              = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment     = Alignment.CenterVertically
     ) {
-        Text(text = label, style = MaterialTheme.typography.bodyMedium)
+        Text(
+            text  = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Spacer(Modifier.width(12.dp))
         Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold
+            text       = value,
+            style      = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            color      = MaterialTheme.colorScheme.onSurface
         )
     }
 }
-

@@ -43,7 +43,9 @@ class AppUsageViewModel(app: Application) : AndroidViewModel(app) {
         else apps.filter { it.label.contains(q, ignoreCase = true) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    fun setSearchQuery(q: String) { _searchQuery.value = q }
+    fun setSearchQuery(q: String) {
+        _searchQuery.value = q
+    }
 
     init {
         // Preload common ranges in background so screens are instant
@@ -53,15 +55,20 @@ class AppUsageViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun loadUsage(range: UsageRange) {
-        _state.value = _state.value.copy(isLoading = true, selectedRange = range, customRangeLabel = null)
+        _state.value =
+            _state.value.copy(isLoading = true, selectedRange = range, customRangeLabel = null)
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val (s, e) = when (range) {
-                    UsageRange.TODAY       -> repo.todayRange()
-                    UsageRange.YESTERDAY   -> repo.yesterdayRange()
+                    UsageRange.TODAY -> repo.todayRange()
+                    UsageRange.YESTERDAY -> repo.yesterdayRange()
                     UsageRange.LAST_7_DAYS -> repo.lastNDaysRange(7)
                 }
-                _state.value = _state.value.copy(isLoading = false, summary = repo.getUsageSummary(s, e), error = null)
+                _state.value = _state.value.copy(
+                    isLoading = false,
+                    summary = repo.getUsageSummary(s, e),
+                    error = null
+                )
             } catch (ex: Exception) {
                 _state.value = _state.value.copy(isLoading = false, error = ex.message)
             }
@@ -72,7 +79,11 @@ class AppUsageViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(isLoading = true, customRangeLabel = label)
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                _state.value = _state.value.copy(isLoading = false, summary = repo.getUsageSummary(rangeStart, rangeEnd), error = null)
+                _state.value = _state.value.copy(
+                    isLoading = false,
+                    summary = repo.getUsageSummary(rangeStart, rangeEnd),
+                    error = null
+                )
             } catch (ex: Exception) {
                 _state.value = _state.value.copy(isLoading = false, error = ex.message)
             }
@@ -83,9 +94,12 @@ class AppUsageViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             val pm = getApplication<Application>().packageManager
             _allApps.value = pm.getInstalledApplications(PackageManager.GET_META_DATA)
-                .filter { it.flags and ApplicationInfo.FLAG_SYSTEM == 0 }
+                // Filter for apps that the user can actually open/launch.
+                // This includes pre-installed apps like YouTube, but hides background system services.
+                .filter { pm.getLaunchIntentForPackage(it.packageName) != null }
                 .map { InstalledApp(it.packageName, pm.getApplicationLabel(it).toString()) }
                 .sortedBy { it.label.lowercase() }
         }
     }
+
 }

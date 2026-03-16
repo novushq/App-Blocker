@@ -4,11 +4,16 @@
 
     <!-- Shown in Settings → Accessibility list -->
     <string name="accessibility_service_label">FocusGuard Website Blocker</string>
+    <string name="shorts_accessibility_label">FocusGuard Shorts Blocker</string>
 
     <!-- Shown when user taps the service in the Accessibility settings page -->
     <string name="accessibility_service_description">
         FocusGuard reads the address bar in supported browsers to detect and block
         websites according to your schedule. It does not collect, store, or transmit
         any browsing data.
+    </string>
+    <string name="shorts_accessibility_description">
+        Detects and blocks short-form video content (Shorts, Reels, TikTok) based on
+        your scheduled blocking rules. Does not read personal data.
     </string>
 </resources>

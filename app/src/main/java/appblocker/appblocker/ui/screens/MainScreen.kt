@@ -44,7 +44,6 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedCard
@@ -53,15 +52,17 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.surfaceColorAtElevation
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -81,6 +82,7 @@ import appblocker.appblocker.ui.components.FGSectionHeader
 import appblocker.appblocker.ui.components.FGStatusPill
 import appblocker.appblocker.ui.viewmodel.InstalledApp
 import appblocker.appblocker.ui.viewmodel.MainViewModel
+import kotlinx.coroutines.delay
 
 // ── Main Shell ───────────────────────────────────────────────────────────
 
@@ -94,6 +96,8 @@ fun MainScreen(
     requestOverlay: () -> Unit,
     requestAccessibility: () -> Unit,
     startService: () -> Unit,
+    pauseConfirmDelaySec: Int,
+    pauseDialogQuote: String,
     onOpenAppUsage: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -101,8 +105,8 @@ fun MainScreen(
     val overlayOk = hasOverlayPermission()
     val accessOk = hasAccessibility()
 
-    if (!usageOk || !overlayOk) {
-        PermissionSetupScreen(
+    if (!usageOk || !overlayOk || !accessOk) {
+        PermissionGateScreen(
             usageOk = usageOk,
             overlayOk = overlayOk,
             accessOk = accessOk,
@@ -117,108 +121,11 @@ fun MainScreen(
             vm = vm,
             accessOk = accessOk,
             requestAccessibility = requestAccessibility,
+            pauseConfirmDelaySec = pauseConfirmDelaySec,
+            pauseDialogQuote = pauseDialogQuote,
             onOpenAppUsage = onOpenAppUsage,
             modifier = modifier
         )
-    }
-}
-
-// ── Permission Screen (The "Onboarding" Look) ────────────────────────────────
-
-@Composable
-private fun PermissionSetupScreen(
-    usageOk: Boolean,
-    overlayOk: Boolean,
-    accessOk: Boolean,
-    requestUsage: () -> Unit,
-    requestOverlay: () -> Unit,
-    requestAccessibility: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Surface(color = MaterialTheme.colorScheme.background, modifier = modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 28.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Icon(
-                Icons.Default.Shield,
-                contentDescription = null,
-                modifier = Modifier.size(80.dp),
-                tint = MaterialTheme.colorScheme.primary
-            )
-            Spacer(Modifier.height(24.dp))
-            Text(
-                "Finalize Setup",
-                style = MaterialTheme.typography.headlineLarge,
-                fontWeight = FontWeight.ExtraBold
-            )
-            Text(
-                "FocusGuard needs these to protect your time.",
-                style = MaterialTheme.typography.bodyLarge,
-                textAlign = TextAlign.Center,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(40.dp))
-
-            PermissionCard(
-                "Activity Tracking",
-                "Required to detect app usage",
-                usageOk,
-                requestUsage,
-                Icons.Default.Timeline
-            )
-            PermissionCard(
-                "Screen Overlay",
-                "Required to show block screen",
-                overlayOk,
-                requestOverlay,
-                Icons.Default.Lock
-            )
-            PermissionCard(
-                "Web Protection",
-                "Required for browser blocking",
-                accessOk,
-                requestAccessibility,
-                Icons.Default.Public
-            )
-        }
-    }
-}
-
-@Composable
-private fun PermissionCard(
-    title: String,
-    desc: String,
-    granted: Boolean,
-    onGrant: () -> Unit,
-    icon: ImageVector
-) {
-    ElevatedCard(
-        modifier = Modifier
-            .padding(vertical = 8.dp)
-            .fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = if (granted) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
-            else MaterialTheme.colorScheme.surface
-        )
-    ) {
-        Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.width(16.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, fontWeight = FontWeight.Bold)
-                Text(desc, style = MaterialTheme.typography.labelMedium)
-            }
-            if (granted) {
-                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            } else {
-                Button(onClick = onGrant, shape = CircleShape) { Text("Allow") }
-            }
-        }
     }
 }
 
@@ -228,14 +135,32 @@ private data class BlockedAppGroup(
     val packageName: String,
     val label: String,
     val rules: List<BlockRule>,
+    val mergedWindows: List<MergedRuleWindow>,
     val usageTodayMs: Long
 )
 
 private data class BlockedWebsiteGroup(
     val domain: String,
     val label: String,
-    val rules: List<BlockRule>
+    val rules: List<BlockRule>,
+    val mergedWindows: List<MergedRuleWindow>
 )
+
+private data class MergedRuleWindow(
+    val dayOfWeek: Int,
+    val startMinute: Int,
+    val endMinute: Int,
+    val sourceIds: List<Long>,
+    val isEnabled: Boolean,
+    val pausedUntilMs: Long
+) {
+    fun timeLabel(): String = "%02d:%02d – %02d:%02d".format(
+        startMinute / 60,
+        startMinute % 60,
+        endMinute / 60,
+        endMinute % 60
+    )
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -243,6 +168,8 @@ private fun BlocksOverviewScreen(
     vm: MainViewModel,
     accessOk: Boolean,
     requestAccessibility: () -> Unit,
+    pauseConfirmDelaySec: Int,
+    pauseDialogQuote: String,
     onOpenAppUsage: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -269,6 +196,7 @@ private fun BlocksOverviewScreen(
                     packageName = packageName,
                     label = rules.firstOrNull()?.label?.ifBlank { packageName } ?: packageName,
                     rules = rules.sortedBy { it.dayOfWeek * 10000 + it.startHour * 100 + it.startMinute },
+                    mergedWindows = mergeRuleWindows(rules),
                     usageTodayMs = usageByPackage[packageName]?.totalTimeMs ?: 0L
                 )
             }
@@ -283,7 +211,8 @@ private fun BlocksOverviewScreen(
                 BlockedWebsiteGroup(
                     domain = domain,
                     label = rules.firstOrNull()?.label?.ifBlank { domain } ?: domain,
-                    rules = rules.sortedBy { it.dayOfWeek * 10000 + it.startHour * 100 + it.startMinute }
+                    rules = rules.sortedBy { it.dayOfWeek * 10000 + it.startHour * 100 + it.startMinute },
+                    mergedWindows = mergeRuleWindows(rules)
                 )
             }
             .sortedBy { it.label.lowercase() }
@@ -292,11 +221,10 @@ private fun BlocksOverviewScreen(
     Scaffold(
         modifier = modifier,
         topBar = {
-            LargeTopAppBar(
+            TopAppBar(
                 title = { Text("Blocks", fontWeight = FontWeight.Black) },
-                colors = TopAppBarDefaults.largeTopAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    scrolledContainerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(4.dp)
+                colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background
                 )
             )
         },
@@ -403,8 +331,12 @@ private fun BlocksOverviewScreen(
         AppRuleDetailSheet(
             group = app,
             onDismiss = { selectedAppPackage = null },
-            onToggle = vm::toggleRule,
-            onDelete = vm::deleteRule,
+            onToggleMany = vm::toggleRules,
+            onDeleteMany = vm::deleteRules,
+            onPauseAll = { minutes -> vm.pauseRules(app.rules.map(BlockRule::id), minutes) },
+            onResumeAll = { vm.resumeRules(app.rules.map(BlockRule::id)) },
+            pauseConfirmDelaySec = pauseConfirmDelaySec,
+            pauseDialogQuote = pauseDialogQuote,
             onOpenUsage = {
                 onOpenAppUsage(app.packageName)
                 selectedAppPackage = null
@@ -417,8 +349,12 @@ private fun BlocksOverviewScreen(
         WebsiteRuleDetailSheet(
             group = website,
             onDismiss = { selectedWebsiteDomain = null },
-            onToggle = vm::toggleRule,
-            onDelete = vm::deleteRule
+            onToggleMany = vm::toggleRules,
+            onDeleteMany = vm::deleteRules,
+            onPauseAll = { minutes -> vm.pauseRules(website.rules.map(BlockRule::id), minutes) },
+            onResumeAll = { vm.resumeRules(website.rules.map(BlockRule::id)) },
+            pauseConfirmDelaySec = pauseConfirmDelaySec,
+            pauseDialogQuote = pauseDialogQuote
         )
     }
 }
@@ -439,9 +375,9 @@ private fun EmptySectionCard(text: String) {
 
 @Composable
 private fun AppBlockCard(group: BlockedAppGroup, onClick: () -> Unit) {
-    val enabledCount = group.rules.count { it.isEnabled }
-    val totalCount = group.rules.size
-    val dayLabel = group.rules.map { DAY_LABELS[it.dayOfWeek - 1] }.distinct().joinToString(", ")
+    val enabledCount = group.mergedWindows.count { it.isEnabled && remainingPauseMinutes(it.pausedUntilMs) == 0L }
+    val totalCount = group.mergedWindows.size.coerceAtLeast(1)
+    val dayLabel = group.mergedWindows.map { DAY_LABELS[it.dayOfWeek - 1] }.distinct().joinToString(", ")
 
     OutlinedCard(
         onClick = onClick,
@@ -480,8 +416,8 @@ private fun AppBlockCard(group: BlockedAppGroup, onClick: () -> Unit) {
 
 @Composable
 private fun WebsiteBlockCard(group: BlockedWebsiteGroup, onClick: () -> Unit) {
-    val enabledCount = group.rules.count { it.isEnabled }
-    val totalCount = group.rules.size
+    val enabledCount = group.mergedWindows.count { it.isEnabled && remainingPauseMinutes(it.pausedUntilMs) == 0L }
+    val totalCount = group.mergedWindows.size
 
     OutlinedCard(
         onClick = onClick,
@@ -505,7 +441,7 @@ private fun WebsiteBlockCard(group: BlockedWebsiteGroup, onClick: () -> Unit) {
             Column(Modifier.weight(1f)) {
                 Text(group.label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Text(
-                    text = "$totalCount restriction(s)",
+                    text = "$totalCount time block(s)",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -522,10 +458,18 @@ private fun WebsiteBlockCard(group: BlockedWebsiteGroup, onClick: () -> Unit) {
 private fun AppRuleDetailSheet(
     group: BlockedAppGroup,
     onDismiss: () -> Unit,
-    onToggle: (Long, Boolean) -> Unit,
-    onDelete: (Long) -> Unit,
+    onToggleMany: (List<Long>, Boolean) -> Unit,
+    onDeleteMany: (List<Long>) -> Unit,
+    onPauseAll: (Int) -> Unit,
+    onResumeAll: () -> Unit,
+    pauseConfirmDelaySec: Int,
+    pauseDialogQuote: String,
     onOpenUsage: () -> Unit
 ) {
+    var showPauseDialog by remember { mutableStateOf(false) }
+    val pausedMinutes = group.rules.maxOfOrNull { remainingPauseMinutes(it.pausedUntilMs) } ?: 0L
+    val isPaused = pausedMinutes > 0L
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         dragHandle = { BottomSheetDefaults.DragHandle() }
@@ -543,8 +487,26 @@ private fun AppRuleDetailSheet(
                 Spacer(Modifier.width(8.dp))
                 Text("Open usage details")
             }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (isPaused) {
+                    Button(onClick = onResumeAll, modifier = Modifier.weight(1f)) {
+                        Text("Resume all")
+                    }
+                } else {
+                    Button(onClick = { showPauseDialog = true }, modifier = Modifier.weight(1f)) {
+                        Text("Pause all")
+                    }
+                }
+            }
+            if (isPaused) {
+                Text(
+                    text = "Paused for ${pausedMinutes} more min",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
 
-            group.rules.forEachIndexed { index, rule ->
+            group.mergedWindows.forEachIndexed { index, window ->
                 OutlinedCard(shape = RoundedCornerShape(16.dp)) {
                     Row(
                         modifier = Modifier
@@ -554,22 +516,41 @@ private fun AppRuleDetailSheet(
                     ) {
                         Column(Modifier.weight(1f)) {
                             Text(
-                                text = "${DAY_LABELS[rule.dayOfWeek - 1]}  ${rule.timeLabel()}",
+                                text = "${DAY_LABELS[window.dayOfWeek - 1]}  ${window.timeLabel()}",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Medium
                             )
+                            if (remainingPauseMinutes(window.pausedUntilMs) > 0L) {
+                                Text(
+                                    text = "Paused ${remainingPauseMinutes(window.pausedUntilMs)} min",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
-                        Switch(checked = rule.isEnabled, onCheckedChange = { onToggle(rule.id, it) })
-                        IconButton(onClick = { onDelete(rule.id) }) {
+                        Switch(checked = window.isEnabled, onCheckedChange = { onToggleMany(window.sourceIds, it) })
+                        IconButton(onClick = { onDeleteMany(window.sourceIds) }) {
                             Icon(Icons.Default.DeleteOutline, null, tint = MaterialTheme.colorScheme.error)
                         }
                     }
                 }
-                if (index < group.rules.lastIndex) {
+                if (index < group.mergedWindows.lastIndex) {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                 }
             }
         }
+    }
+
+    if (showPauseDialog) {
+        PauseRulesDialog(
+            onDismiss = { showPauseDialog = false },
+            delaySec = pauseConfirmDelaySec,
+            quote = pauseDialogQuote,
+            onConfirm = {
+                onPauseAll(it)
+                showPauseDialog = false
+            }
+        )
     }
 }
 
@@ -578,9 +559,17 @@ private fun AppRuleDetailSheet(
 private fun WebsiteRuleDetailSheet(
     group: BlockedWebsiteGroup,
     onDismiss: () -> Unit,
-    onToggle: (Long, Boolean) -> Unit,
-    onDelete: (Long) -> Unit
+    onToggleMany: (List<Long>, Boolean) -> Unit,
+    onDeleteMany: (List<Long>) -> Unit,
+    onPauseAll: (Int) -> Unit,
+    onResumeAll: () -> Unit,
+    pauseConfirmDelaySec: Int,
+    pauseDialogQuote: String
 ) {
+    var showPauseDialog by remember { mutableStateOf(false) }
+    val pausedMinutes = group.rules.maxOfOrNull { remainingPauseMinutes(it.pausedUntilMs) } ?: 0L
+    val isPaused = pausedMinutes > 0L
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         dragHandle = { BottomSheetDefaults.DragHandle() }
@@ -592,8 +581,26 @@ private fun WebsiteRuleDetailSheet(
                 .padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            FGSectionHeader(title = group.label, subtitle = "${group.rules.size} restriction(s)")
-            group.rules.forEachIndexed { index, rule ->
+            FGSectionHeader(title = group.label, subtitle = "${group.mergedWindows.size} time block(s)")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (isPaused) {
+                    Button(onClick = onResumeAll, modifier = Modifier.weight(1f)) {
+                        Text("Resume all")
+                    }
+                } else {
+                    Button(onClick = { showPauseDialog = true }, modifier = Modifier.weight(1f)) {
+                        Text("Pause all")
+                    }
+                }
+            }
+            if (isPaused) {
+                Text(
+                    text = "Paused for ${pausedMinutes} more min",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            group.mergedWindows.forEachIndexed { index, window ->
                 OutlinedCard(shape = RoundedCornerShape(16.dp)) {
                     Row(
                         modifier = Modifier
@@ -603,22 +610,41 @@ private fun WebsiteRuleDetailSheet(
                     ) {
                         Column(Modifier.weight(1f)) {
                             Text(
-                                text = "${DAY_LABELS[rule.dayOfWeek - 1]}  ${rule.timeLabel()}",
+                                text = "${DAY_LABELS[window.dayOfWeek - 1]}  ${window.timeLabel()}",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Medium
                             )
+                            if (remainingPauseMinutes(window.pausedUntilMs) > 0L) {
+                                Text(
+                                    text = "Paused ${remainingPauseMinutes(window.pausedUntilMs)} min",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
-                        Switch(checked = rule.isEnabled, onCheckedChange = { onToggle(rule.id, it) })
-                        IconButton(onClick = { onDelete(rule.id) }) {
+                        Switch(checked = window.isEnabled, onCheckedChange = { onToggleMany(window.sourceIds, it) })
+                        IconButton(onClick = { onDeleteMany(window.sourceIds) }) {
                             Icon(Icons.Default.DeleteOutline, null, tint = MaterialTheme.colorScheme.error)
                         }
                     }
                 }
-                if (index < group.rules.lastIndex) {
+                if (index < group.mergedWindows.lastIndex) {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                 }
             }
         }
+    }
+
+    if (showPauseDialog) {
+        PauseRulesDialog(
+            onDismiss = { showPauseDialog = false },
+            delaySec = pauseConfirmDelaySec,
+            quote = pauseDialogQuote,
+            onConfirm = {
+                onPauseAll(it)
+                showPauseDialog = false
+            }
+        )
     }
 }
 
@@ -867,6 +893,124 @@ private fun AppPickerDialog(
 }
 
 private enum class RuleType { APP, WEBSITE }
+
+private fun remainingPauseMinutes(pausedUntilMs: Long, nowMs: Long = System.currentTimeMillis()): Long =
+    ((pausedUntilMs - nowMs).coerceAtLeast(0L) + 59_999L) / 60_000L
+
+private fun mergeRuleWindows(rules: List<BlockRule>): List<MergedRuleWindow> {
+    if (rules.isEmpty()) return emptyList()
+
+    val merged = mutableListOf<MergedRuleWindow>()
+    rules.groupBy { it.dayOfWeek }
+        .toSortedMap()
+        .forEach { (day, dayRules) ->
+            val normalRules = dayRules
+                .filter { (it.startHour * 60 + it.startMinute) < (it.endHour * 60 + it.endMinute) }
+                .sortedBy { it.startHour * 60 + it.startMinute }
+
+            var bucket = mutableListOf<BlockRule>()
+            var currentStart = -1
+            var currentEnd = -1
+
+            fun flush() {
+                if (bucket.isEmpty()) return
+                merged += MergedRuleWindow(
+                    dayOfWeek = day,
+                    startMinute = currentStart,
+                    endMinute = currentEnd,
+                    sourceIds = bucket.map(BlockRule::id),
+                    isEnabled = bucket.any { it.isEnabled },
+                    pausedUntilMs = if (bucket.all { it.isPausedAt() }) bucket.maxOf { it.pausedUntilMs } else 0L
+                )
+                bucket = mutableListOf()
+            }
+
+            normalRules.forEach { rule ->
+                val start = rule.startHour * 60 + rule.startMinute
+                val end = rule.endHour * 60 + rule.endMinute
+                if (bucket.isEmpty()) {
+                    bucket += rule
+                    currentStart = start
+                    currentEnd = end
+                } else if (start <= currentEnd) {
+                    bucket += rule
+                    currentEnd = maxOf(currentEnd, end)
+                } else {
+                    flush()
+                    bucket += rule
+                    currentStart = start
+                    currentEnd = end
+                }
+            }
+            flush()
+
+            dayRules
+                .filterNot { (it.startHour * 60 + it.startMinute) < (it.endHour * 60 + it.endMinute) }
+                .forEach { overnight ->
+                    merged += MergedRuleWindow(
+                        dayOfWeek = day,
+                        startMinute = overnight.startHour * 60 + overnight.startMinute,
+                        endMinute = overnight.endHour * 60 + overnight.endMinute,
+                        sourceIds = listOf(overnight.id),
+                        isEnabled = overnight.isEnabled,
+                        pausedUntilMs = if (overnight.isPausedAt()) overnight.pausedUntilMs else 0L
+                    )
+                }
+        }
+
+    return merged.sortedWith(compareBy(MergedRuleWindow::dayOfWeek, MergedRuleWindow::startMinute))
+}
+
+@Composable
+private fun PauseRulesDialog(
+    onDismiss: () -> Unit,
+    delaySec: Int,
+    quote: String,
+    onConfirm: (Int) -> Unit
+) {
+    var sliderValue by remember { mutableFloatStateOf(30f) }
+    var countdownSec by remember(delaySec) { mutableIntStateOf(delaySec.coerceIn(0, 180)) }
+    val minutes = sliderValue.toInt().coerceIn(5, 240)
+
+    LaunchedEffect(delaySec) {
+        countdownSec = delaySec.coerceIn(0, 180)
+        while (countdownSec > 0) {
+            delay(1_000)
+            countdownSec -= 1
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Pause blocking") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    if (countdownSec > 0) "Pause available in ${countdownSec}s."
+                    else "Pause these rules for $minutes minutes."
+                )
+                Text(
+                    text = "\"$quote\"",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Slider(
+                    value = sliderValue,
+                    onValueChange = { sliderValue = it },
+                    valueRange = 5f..240f
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onConfirm(minutes) }, enabled = countdownSec == 0) {
+                Text(if (countdownSec == 0) "Pause" else "Pause (${countdownSec}s)")
+            }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
 
 private fun parseTime(value: String): Pair<Int, Int>? {
     val parts = value.trim().split(":")

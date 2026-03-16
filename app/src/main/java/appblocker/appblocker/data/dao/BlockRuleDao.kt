@@ -33,4 +33,7 @@ interface BlockRuleDao {
 
     @Query("UPDATE block_rules SET isEnabled = :enabled WHERE id = :id")
     suspend fun setEnabled(id: Long, enabled: Boolean)
+
+    @Query("UPDATE block_rules SET pausedUntilMs = :pausedUntilMs WHERE id = :id")
+    suspend fun setPausedUntil(id: Long, pausedUntilMs: Long)
 }

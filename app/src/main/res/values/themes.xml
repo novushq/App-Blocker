@@ -6,8 +6,8 @@
         so this only needs to suppress the default ActionBar and set a window background.
     -->
     <style name="Theme.FocusGuard" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">@android:color/white</item>
-        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">#101311</item>
+        <item name="android:statusBarColor">#101311</item>
     </style>
 
     <!--
